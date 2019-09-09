@@ -98,6 +98,22 @@ std::pair<bool, Vec3> checkGPS
   return val;
 }
 
+std::pair<Mat3, Vec3> checkPose(const std::string s) {
+    size_t i = s.rfind('.', s.length());
+    std::string pos_filename = s.substr(0, i);
+    pos_filename = pos_filename.append(".pos");
+    Mat3 rot;
+    Vec3 tvec;
+    std::ifstream ss;
+    ss.open(pos_filename);
+    double r11, r12, r13, r21, r22, r23, r31, r32, r33, t1, t2, t3;
+    ss >> r11 >> r12 >> r13 >> r21 >> r22 >> r23 >> r31 >> r32 >> r33 >> t1 >> t2 >> t3;
+    rot << r11, r12, r13, r21, r22, r23, r31, r32, r33;
+    tvec << t1, t2, t3;
+    std::cout << "rot = " << rot << std::endl;
+    return std::pair<Mat3, Vec3>(rot, tvec);
+}
+
 
 /// Check string of prior weights
 std::pair<bool, Vec3> checkPriorWeightsString
@@ -159,6 +175,7 @@ int main(int argc, char **argv)
   cmd.add( make_option('c', i_User_camera_model, "camera_model") );
   cmd.add( make_option('g', b_Group_camera_model, "group_camera_model") );
   cmd.add( make_switch('P', "use_pose_prior") );
+  cmd.add( make_switch('F', "use_full_pose_prior") );
   cmd.add( make_option('W', sPriorWeights, "prior_weights"));
   cmd.add( make_option('m', i_GPS_XYZ_method, "gps_to_xyz_method") );
 
@@ -183,7 +200,8 @@ int main(int argc, char **argv)
       << "\t 0-> each view have it's own camera intrinsic parameters,\n"
       << "\t 1-> (default) view can share some camera intrinsic parameters\n"
       << "\n"
-      << "[-P|--use_pose_prior] Use pose prior if GPS EXIF pose is available"
+      << "[-F|--use_full_pose_prior] Use full pose prior from gt file\n"
+      << "[-P|--use_pose_prior] Use pose prior if GPS EXIF pose is available\n"
       << "[-W|--prior_weights] \"x;y;z;\" of weights for each dimension of the prior (default: 1.0)\n"
       << "[-m|--gps_to_xyz_method] XZY Coordinate system:\n"
       << "\t 0: ECEF (default)\n"
@@ -404,7 +422,38 @@ int main(int argc, char **argv)
 
     // Build the view corresponding to the image
     const std::pair<bool, Vec3> gps_info = checkGPS(sImageFilename, i_GPS_XYZ_method);
-    if (gps_info.first && cmd.used('P'))
+    if (cmd.used('F'))
+    {
+      ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
+      const std::pair<Mat3, Vec3> pose_info = checkPose(sImageFilename);
+      // Add intrinsic related to the image (if any)
+      if (intrinsic == nullptr)
+      {
+        //Since the view have invalid intrinsic data
+        // (export the view, with an invalid intrinsic field value)
+        v.id_intrinsic = UndefinedIndexT;
+      }
+      else
+      {
+        // Add the defined intrinsic to the sfm_container
+        intrinsics[v.id_intrinsic] = intrinsic;
+      }
+
+      v.b_use_pose_center_ = true;
+      v.b_use_pose_rotation_ = true;
+      v.pose_center_ = -pose_info.first.transpose()*pose_info.second;
+      v.pose_rotation_ = pose_info.first;
+
+      // prior weights
+      if (prior_w_info.first == true)
+      {
+        v.center_weight_ = prior_w_info.second;
+      }
+
+      // Add the view to the sfm_container
+      views[v.id_view] = std::make_shared<ViewPriors>(v);
+    }
+    else if (gps_info.first && cmd.used('P'))
     {
       ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
 

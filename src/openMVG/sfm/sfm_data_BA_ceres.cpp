@@ -76,6 +76,45 @@ struct PoseCenterConstraintCostFunction
   }
 };
 
+// Ceres CostFunctor used for SfM pose rotation prior
+struct PoseRotationConstraintCostFunction
+{
+  double weight_;
+  Mat3 pose_rotation_constraint_;
+
+  PoseRotationConstraintCostFunction
+  (
+    const Mat3& rotation,
+    double weight
+  ): weight_(weight), pose_rotation_constraint_(rotation)
+  {
+  }
+
+  template <typename T> bool
+  operator()
+  (
+    const T* const cam_extrinsics, // R_t
+    T* residuals
+  )
+  const
+  {
+    using Vec3T = Eigen::Matrix<T,3,1>;
+    using Mat3T = Eigen::Matrix<T,3,3>;
+    Eigen::Map<const Vec3T> cam_R(&cam_extrinsics[0]);
+    const Vec3T cam_R_transpose(-cam_R);
+    Mat3T cam_R_transpose_mat;
+    ceres::AngleAxisToRotationMatrix(cam_R_transpose.data(), cam_R_transpose_mat.data());
+
+    Eigen::Map<Mat3T> residuals_eigen(residuals);
+    residuals_eigen = T(weight_) * (cam_R_transpose_mat * pose_rotation_constraint_);
+    residuals_eigen(0, 0) -= T(1.0);
+    residuals_eigen(1, 1) -= T(1.0);
+    residuals_eigen(2, 2) -= T(1.0);
+
+    return true;
+  }
+};
+
 /// Create the appropriate cost functor according the provided input camera intrinsic model.
 /// The residual can be weighetd if desired (default 0.0 means no weight).
 ceres::CostFunction * IntrinsicsToCostFunction
@@ -447,6 +486,19 @@ bool Bundle_Adjustment_Ceres::Adjust
           cost_function,
           new ceres::HuberLoss(
             Square(pose_center_robust_fitting_error)),
+                   &map_poses.at(prior->id_view)[0]);
+      }
+      if (prior != nullptr && prior->b_use_pose_rotation_&& sfm_data.IsPoseAndIntrinsicDefined(prior))
+      {
+        // Add the cost functor (distance from Pose prior to the SfM_Data Pose center)
+        ceres::CostFunction * cost_function =
+          new ceres::AutoDiffCostFunction<PoseRotationConstraintCostFunction, 9, 6>(
+            new PoseRotationConstraintCostFunction(prior->pose_rotation_, prior->rotation_weight_));
+
+
+        problem.AddResidualBlock(
+          cost_function,
+          new ceres::TrivialLoss(),
                    &map_poses.at(prior->id_view)[0]);
       }
     }
