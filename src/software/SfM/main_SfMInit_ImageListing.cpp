@@ -98,7 +98,7 @@ std::pair<bool, Vec3> checkGPS
   return val;
 }
 
-std::pair<Mat3, Vec3> checkPose(const std::string s) {
+std::pair<Mat3, Vec3> checkRT(const std::string s) {
     size_t i = s.rfind('.', s.length());
     std::string pos_filename = s.substr(0, i);
     pos_filename = pos_filename.append(".pos");
@@ -110,8 +110,26 @@ std::pair<Mat3, Vec3> checkPose(const std::string s) {
     ss >> r11 >> r12 >> r13 >> r21 >> r22 >> r23 >> r31 >> r32 >> r33 >> t1 >> t2 >> t3;
     rot << r11, r12, r13, r21, r22, r23, r31, r32, r33;
     tvec << t1, t2, t3;
-    std::cout << "rot = " << rot << std::endl;
+    if (ss.fail()) {
+        throw std::runtime_error("Could not parse rotation and translation.");
+    }
     return std::pair<Mat3, Vec3>(rot, tvec);
+}
+
+Vec3 checkT(const std::string s) {
+    size_t i = s.rfind('.', s.length());
+    std::string pos_filename = s.substr(0, i);
+    pos_filename = pos_filename.append(".pos");
+    Vec3 tvec;
+    std::ifstream ss;
+    ss.open(pos_filename);
+    double t1, t2, t3;
+    ss >> t1 >> t2 >> t3;
+    tvec << t1, t2, t3;
+    if (ss.fail()) {
+        throw std::runtime_error("Could not parse translation.");
+    }
+    return tvec;
 }
 
 
@@ -274,7 +292,7 @@ int main(int argc, char **argv)
   }
 
   // Check if prior weights are given
-  if (cmd.used('P') && !sPriorWeights.empty())
+  if (( cmd.used('P') || cmd.used('F') )&& !sPriorWeights.empty())
   {
     prior_w_info = checkPriorWeightsString(sPriorWeights);
   }
@@ -425,7 +443,6 @@ int main(int argc, char **argv)
     if (cmd.used('F'))
     {
       ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
-      const std::pair<Mat3, Vec3> pose_info = checkPose(sImageFilename);
       // Add intrinsic related to the image (if any)
       if (intrinsic == nullptr)
       {
@@ -439,10 +456,25 @@ int main(int argc, char **argv)
         intrinsics[v.id_intrinsic] = intrinsic;
       }
 
-      v.b_use_pose_center_ = true;
-      v.b_use_pose_rotation_ = true;
-      v.pose_center_ = -pose_info.first.transpose()*pose_info.second;
-      v.pose_rotation_ = pose_info.first;
+      try {
+
+          const std::pair<Mat3, Vec3> pose_info = checkRT(sImageFilename);
+
+          v.b_use_pose_center_ = true;
+          v.b_use_pose_rotation_ = true;
+          v.pose_center_ = -pose_info.first.transpose()*pose_info.second;
+          v.pose_rotation_ = pose_info.first;
+      } catch (const std::runtime_error& e) {
+          try {
+              Vec3 pose_info = checkT(sImageFilename);
+              v.b_use_pose_center_ = true;
+              v.b_use_pose_rotation_ = false;
+              v.pose_center_ = pose_info;
+          }
+          catch (const std::string& s) {
+              return EXIT_FAILURE;
+          }
+      }
 
       // prior weights
       if (prior_w_info.first == true)
